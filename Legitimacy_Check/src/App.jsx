@@ -30,6 +30,9 @@ import MenuIcon from "@mui/icons-material/Menu";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import { useTheme } from "@mui/material/styles";
 
+/* ---------- Backend URL ---------- */
+const BACKEND_URL = "https://website-legitimacy-checker-backend.onrender.com";
+
 /* ---------- Color Helpers ---------- */
 const getColor = (value, type) => {
   if (!value) return "default";
@@ -159,22 +162,26 @@ export default function App() {
       .map((u) => u.trim())
       .filter(Boolean);
 
-    const responses = await Promise.all(
-      urls.map((url) =>
-        fetch("http://localhost:5000/analyze", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ urls: [url] }),
-        }).then((r) => r.json()),
-      ),
-    );
+    try {
+      const responses = await Promise.all(
+        urls.map((url) =>
+          fetch(`${BACKEND_URL}/analyze`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ urls: [url] }),
+          }).then((r) => r.json()),
+        ),
+      );
 
-    setResults((prev) => {
-      const newData = responses.map((r) => r[0]);
-      const map = new Map(prev.map((p) => [p.site, p]));
-      newData.forEach((n) => map.set(n.site, n));
-      return Array.from(map.values());
-    });
+      setResults((prev) => {
+        const newData = responses.map((r) => r[0]);
+        const map = new Map(prev.map((p) => [p.site, p]));
+        newData.forEach((n) => map.set(n.site, n));
+        return Array.from(map.values());
+      });
+    } catch (err) {
+      console.error("Error fetching data from backend:", err);
+    }
 
     setInput("");
     setSelected([]);
