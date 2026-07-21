@@ -1,22 +1,31 @@
 import express from "express";
 import cors from "cors";
 import dns from "dns/promises";
-import fetch from "node-fetch";
+import puppeteer from "puppeteer";
 import whois from "whois-json";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
+const PLATFORM_DOMAINS = ["vercel.app", "netlify.app", "github.io"];
 const cache = new Map();
 
 /* ---------- Helpers ---------- */
+
+function isSuspiciousSubdomain(domain) {
+  const parts = domain.split(".");
+  if (parts.length < 3) return false;
+  const sub = parts.slice(0, -2).join("");
+  return sub.length < 5 || /^[a-z0-9]+$/.test(sub);
+}
+
 async function checkHttps(domain) {
   try {
     const res = await fetch(`https://${domain}`, {
       method: "HEAD",
       redirect: "follow",
-      timeout: 4000,
+      signal: AbortSignal.timeout(4000),
     });
     return res.ok;
   } catch {
@@ -24,10 +33,25 @@ async function checkHttps(domain) {
   }
 }
 
-function calculateRisk({ https, domainAgeDays }) {
-  if (!https) return { risk: "HIGH", status: "SUSPICIOUS", confidence: 20 };
-  if (domainAgeDays < 180) return { risk: "MEDIUM", status: "REAL", confidence: 60 };
-  return { risk: "LOW", status: "REAL", confidence: 90 };
+async function puppeteerCheck(url) {
+  const browser = await puppeteer.launch({
+    headless: "new",
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+
+  try {
+    const page = await browser.newPage();
+    const response = await page.goto(url, {
+      waitUntil: "networkidle2",
+      timeout: 15000,
+    });
+
+    await browser.close();
+    return { reachable: true, status: response.status() };
+  } catch (err) {
+    await browser.close();
+    return { reachable: false, error: err.message };
+  }
 }
 
 function inferDeployment(ip) {
@@ -39,14 +63,30 @@ function inferDeployment(ip) {
 }
 
 /* ---------- Analyzer ---------- */
+
 async function analyzeDomain(input) {
+  const url = input.startsWith("http") ? input : `https://${input}`;
+  const domain = new URL(url).hostname.replace("www.", "");
+
+  if (cache.has(domain)) return cache.get(domain);
+
+  /* Platform subdomain rule */
+  if (PLATFORM_DOMAINS.some((p) => domain.endsWith(p))) {
+    if (isSuspiciousSubdomain(domain)) {
+      const result = {
+        site: domain,
+        status: "UNVERIFIED",
+        risk: "MEDIUM",
+        trustLevel: "LOW",
+        explanation: "Random platform subdomain (can host anything)",
+        publishedOn: "Platform Hosting",
+      };
+      cache.set(domain, result);
+      return result;
+    }
+  }
+
   try {
-    const url = input.startsWith("http") ? input : `https://${input}`;
-    const parsed = new URL(url);
-    const domain = parsed.hostname.replace("www.", "");
-
-    if (cache.has(domain)) return cache.get(domain);
-
     // DNS
     const dnsResult = await dns.lookup(domain);
     const ip = dnsResult.address;
@@ -56,17 +96,12 @@ async function analyzeDomain(input) {
 
     // WHOIS
     let created = null;
-    let updated = null;
     try {
       const whoisData = await whois(domain);
       created =
         whoisData.creationDate ||
         whoisData.created ||
         whoisData.registered ||
-        null;
-      updated =
-        whoisData.updatedDate ||
-        whoisData.modified ||
         null;
     } catch {}
 
@@ -77,54 +112,61 @@ async function analyzeDomain(input) {
       );
     }
 
-    const { risk, status, confidence } = calculateRisk({
-      https,
-      domainAgeDays,
-    });
+    // Puppeteer live test
+    const live = await puppeteerCheck(url);
+
+    let risk = "LOW";
+    let status = "REAL";
+
+    if (!https || !live.reachable) {
+      risk = "HIGH";
+      status = "SUSPICIOUS";
+    } else if (domainAgeDays < 180) {
+      risk = "MEDIUM";
+    }
 
     const result = {
       site: domain,
       status,
       risk,
-      confidence,
-      domainCreated: created
-        ? new Date(created).toISOString().split("T")[0]
-        : null,
-      lastUpdated: updated
-        ? new Date(updated).toISOString().split("T")[0]
-        : null,
+      https: https ? "Enabled" : "Disabled",
+      domainAgeDays,
       deployment: inferDeployment(ip),
+      browserTest: live.reachable ? "Loaded Successfully" : "Failed",
       explanation:
         risk === "LOW"
-          ? "Established domain with HTTPS and stable hosting"
+          ? "Stable domain with HTTPS and browser verification"
           : risk === "MEDIUM"
-          ? "Relatively new domain, verify carefully"
-          : "High risk: HTTPS missing or unstable domain",
+          ? "New domain – verify authenticity"
+          : "High risk – browser or security checks failed",
     };
 
     cache.set(domain, result);
     return result;
   } catch {
     return {
-      site: input,
+      site: domain,
       status: "FAKE",
       risk: "HIGH",
-      confidence: 10,
-      domainCreated: null,
-      lastUpdated: null,
-      deployment: "Unknown",
-      explanation: "Domain not found or DNS failed",
+      explanation: "DNS lookup failed or domain not found",
     };
   }
 }
 
 /* ---------- API ---------- */
+
 app.post("/analyze", async (req, res) => {
-  const { urls = [] } = req.body;
-  const results = await Promise.all(urls.map(analyzeDomain));
-  res.json(results);
+  const { domain } = req.body;
+  if (!domain) {
+    return res.status(400).json({ error: "Domain is required" });
+  }
+
+  const result = await analyzeDomain(domain);
+  res.json(result);
 });
 
-app.listen(5000, () =>
-  console.log("Backend running at http://localhost:5000")
-);
+/* ---------- Server ---------- */
+
+app.listen(4000, () => {
+  console.log("Backend running on http://localhost:4000");
+});

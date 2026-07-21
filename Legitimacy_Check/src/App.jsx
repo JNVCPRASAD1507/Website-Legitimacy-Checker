@@ -1,4 +1,3 @@
-// App.jsx
 import React, { useState } from "react";
 import {
   Container,
@@ -20,55 +19,30 @@ import {
   IconButton,
   Menu,
   MenuItem,
-  Card,
-  CardContent,
-  Divider,
-  useMediaQuery,
   Chip,
+  useMediaQuery,
 } from "@mui/material";
 import MenuIcon from "@mui/icons-material/Menu";
-import MoreVertIcon from "@mui/icons-material/MoreVert";
 import { useTheme } from "@mui/material/styles";
 
-/* ---------- Backend URL ---------- */
-const BACKEND_URL = "https://website-legitimacy-checker-backend.onrender.com";
-
-/* ---------- Color Helpers ---------- */
+/* ================= Helpers ================= */
 const getColor = (value, type) => {
   if (!value) return "default";
   const v = value.toUpperCase();
-
-  if (type === "status") {
-    if (v === "REAL") return "success";
-    if (v === "SUSPICIOUS") return "warning";
-    if (v === "FAKE") return "error";
-  }
-
-  if (type === "risk") {
-    if (v === "LOW") return "success";
-    if (v === "MEDIUM") return "warning";
-    if (v === "HIGH") return "error";
-  }
-
-  if (type === "trust") {
-    if (v === "HIGH") return "success";
-    if (v === "MEDIUM") return "warning";
-    if (v === "LOW") return "error";
-  }
-
+  if (type === "status")
+    return v === "REAL" ? "success" : v === "FAKE" ? "error" : "warning";
+  if (type === "risk")
+    return v === "LOW" ? "success" : v === "HIGH" ? "error" : "warning";
+  if (type === "trust")
+    return v === "HIGH" ? "success" : v === "LOW" ? "error" : "warning";
   return "default";
 };
 
 const StatusChip = ({ label, type }) => (
-  <Chip
-    label={label}
-    color={getColor(label, type)}
-    size="small"
-    sx={{ fontWeight: 600 }}
-  />
+  <Chip label={label} color={getColor(label, type)} size="small" sx={{ fontWeight: 600 }} />
 );
 
-/* ---------- Column Selector ---------- */
+/* ================= Column Selector ================= */
 function ColumnSelector({ columns, setColumns }) {
   const [anchorEl, setAnchorEl] = useState(null);
 
@@ -77,21 +51,14 @@ function ColumnSelector({ columns, setColumns }) {
       <IconButton onClick={(e) => setAnchorEl(e.currentTarget)}>
         <MenuIcon />
       </IconButton>
-
-      <Menu
-        anchorEl={anchorEl}
-        open={Boolean(anchorEl)}
-        onClose={() => setAnchorEl(null)}
-      >
+      <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={() => setAnchorEl(null)}>
         {Object.keys(columns).map((key) => (
           <MenuItem key={key}>
             <FormControlLabel
               control={
                 <Checkbox
                   checked={columns[key]}
-                  onChange={(e) =>
-                    setColumns((prev) => ({ ...prev, [key]: e.target.checked }))
-                  }
+                  onChange={(e) => setColumns((prev) => ({ ...prev, [key]: e.target.checked }))}
                 />
               }
               label={key}
@@ -103,7 +70,17 @@ function ColumnSelector({ columns, setColumns }) {
   );
 }
 
-/* ---------- MAIN APP ---------- */
+/* ================= Platform Subdomain Check ================= */
+const PLATFORM_DOMAINS = ["vercel.app", "netlify.app", "github.io"];
+
+function isSuspiciousSubdomain(domain) {
+  const parts = domain.split(".");
+  const sub = parts.slice(0, -2).join(""); // subdomain before platform
+  // flag if subdomain is short/random (like less than 5 chars or numeric-heavy)
+  return sub.length < 5 || /^[a-z0-9]{5,}$/.test(sub);
+}
+
+/* ================= MAIN APP ================= */
 export default function App() {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
@@ -117,79 +94,172 @@ export default function App() {
     status: true,
     risk: true,
     trustLevel: true,
-    securityLevel: false,
-    credibilityMismatch: false,
+    securityLevel: true,
+    credibilityMismatch: true,
     publishedOn: true,
     explanation: true,
-    browserNote: false,
+    browserNote: true,
   });
 
-  const [selected, setSelected] = useState([]);
-  const [menuAnchor, setMenuAnchor] = useState(null);
+  const cleanDomain = (url) => url.replace(/^https?:\/\//, "").replace("www.", "").trim();
 
-  /* ---------- Selection ---------- */
-  const isSelected = (site) => selected.includes(site);
+  /* ================= Domain Analysis ================= */
+  const analyzeDomain = async (domain) => {
+    try {
+      // Platform subdomain check
+      if (PLATFORM_DOMAINS.some((p) => domain.endsWith(p))) {
+        if (isSuspiciousSubdomain(domain)) {
+          return {
+            site: domain,
+            status: "FAKE",
+            risk: "HIGH",
+            trustLevel: "LOW",
+            securityLevel: "HTTPS Enabled",
+            credibilityMismatch: "Yes",
+            publishedOn: "Unknown",
+            explanation: "Suspicious platform subdomain – likely fake site",
+            browserNote: "Avoid this website",
+          };
+        } else {
+          return {
+            site: domain,
+            status: "REAL",
+            risk: "LOW",
+            trustLevel: "HIGH",
+            securityLevel: "HTTPS Enabled",
+            credibilityMismatch: "No",
+            publishedOn: "Platform Subdomain",
+            explanation: "Known safe platform subdomain",
+            browserNote: "Safe to visit",
+          };
+        }
+      }
 
-  const handleSelectAll = (e) => {
-    setSelected(e.target.checked ? results.map((r) => r.site) : []);
+      // DNS check
+      const dns = await fetch(`https://dns.google/resolve?name=${domain}&type=A`).then((r) =>
+        r.json(),
+      );
+      const hasDNS = dns.Answer?.length > 0;
+
+      // HTTPS check
+      let https = false;
+      try {
+        await fetch(`https://${domain}`, { mode: "no-cors" });
+        https = true;
+      } catch {}
+
+      if (!https) {
+        return {
+          site: domain,
+          status: "FAKE",
+          risk: "HIGH",
+          trustLevel: "LOW",
+          securityLevel: "No HTTPS",
+          credibilityMismatch: domain.includes("login") || domain.includes("bank") ? "Yes" : "No",
+          publishedOn: "Unknown",
+          explanation: "No HTTPS detected – site likely unsafe",
+          browserNote: "Avoid this website",
+        };
+      }
+
+      // RDAP / WHOIS
+      let created = "Unknown";
+      try {
+        const rdap = await fetch(`https://rdap.org/domain/${domain}`).then((r) => r.json());
+        const event = rdap.events?.find((e) => e.eventAction === "registration");
+        created = event?.eventDate?.split("T")[0] || "Unknown";
+      } catch {}
+
+      // Risk assessment
+      let status = "REAL",
+        risk = "LOW",
+        trustLevel = "HIGH";
+
+      if (!hasDNS) {
+        status = "FAKE";
+        risk = "HIGH";
+        trustLevel = "LOW";
+      } else if (!https || created === "Unknown") {
+        status = "SUSPICIOUS";
+        risk = "MEDIUM";
+        trustLevel = "MEDIUM";
+      }
+
+      return {
+        site: domain,
+        status,
+        risk,
+        trustLevel,
+        securityLevel: https ? "HTTPS Enabled" : "No HTTPS",
+        credibilityMismatch: domain.includes("login") || domain.includes("bank") ? "Yes" : "No",
+        publishedOn: created,
+        explanation:
+          risk === "LOW"
+            ? "Valid DNS, HTTPS, and established domain"
+            : risk === "MEDIUM"
+            ? "Limited trust signals or new domain"
+            : "Domain not found or invalid DNS",
+        browserNote:
+          risk === "LOW"
+            ? "Safe to visit"
+            : risk === "MEDIUM"
+            ? "Proceed with caution"
+            : "Avoid this website",
+      };
+    } catch {
+      return {
+        site: domain,
+        status: "FAKE",
+        risk: "HIGH",
+        trustLevel: "LOW",
+        securityLevel: "Unknown",
+        credibilityMismatch: "Yes",
+        publishedOn: "Unknown",
+        explanation: "Domain analysis failed",
+        browserNote: "Avoid this website",
+      };
+    }
   };
 
-  const handleSelectOne = (site) => {
-    setSelected((prev) =>
-      prev.includes(site) ? prev.filter((s) => s !== site) : [...prev, site],
-    );
+  /* ================= CSV EXPORT ================= */
+  const exportToCSV = () => {
+    if (!results.length) return;
+
+    const activeCols = Object.keys(columns).filter((c) => columns[c]);
+    const rows = [
+      activeCols.join(","),
+      ...results.map((r) =>
+        activeCols.map((c) => `"${(r[c] ?? "").replace(/"/g, '""')}"`).join(","),
+      ),
+    ];
+
+    const blob = new Blob([rows.join("\n")], { type: "text/csv" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "website_legitimacy_report.csv";
+    link.click();
+    URL.revokeObjectURL(link.href);
   };
 
-  /* ---------- Bulk Actions ---------- */
-  const deleteSelected = () => {
-    setResults((prev) => prev.filter((r) => !selected.includes(r.site)));
-    setSelected([]);
-    setMenuAnchor(null);
-  };
-
-  const clearSelection = () => {
-    setSelected([]);
-    setMenuAnchor(null);
-  };
-
-  /* ---------- API Call ---------- */
   const checkSites = async () => {
     if (!input.trim()) return;
-
     setLoading(true);
-    const urls = input
-      .split("\n")
-      .map((u) => u.trim())
-      .filter(Boolean);
 
-    try {
-      const responses = await Promise.all(
-        urls.map((url) =>
-          fetch(`${BACKEND_URL}/analyze`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ urls: [url] }),
-          }).then((r) => r.json()),
-        ),
-      );
+    const domains = input.split("\n").map(cleanDomain).filter(Boolean);
+    const analyzed = await Promise.all(domains.map(analyzeDomain));
 
-      setResults((prev) => {
-        const newData = responses.map((r) => r[0]);
-        const map = new Map(prev.map((p) => [p.site, p]));
-        newData.forEach((n) => map.set(n.site, n));
-        return Array.from(map.values());
-      });
-    } catch (err) {
-      console.error("Error fetching data from backend:", err);
-    }
+    setResults((prev) => {
+      const map = new Map(prev.map((p) => [p.site, p]));
+      analyzed.forEach((r) => map.set(r.site, r));
+      return Array.from(map.values());
+    });
 
     setInput("");
-    setSelected([]);
     setLoading(false);
   };
 
   return (
-    <Container maxWidth="md" sx={{ mt: 4, mb: 4 }}>
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
       <Typography variant="h4" align="center" gutterBottom>
         Website Legitimacy Checker
       </Typography>
@@ -209,205 +279,45 @@ export default function App() {
         <Button variant="contained" onClick={checkSites} disabled={loading}>
           {loading ? <CircularProgress size={20} /> : "Check"}
         </Button>
+
         <Button variant="outlined" onClick={() => setResults([])}>
           Reset
+        </Button>
+
+        <Button variant="outlined" color="success" onClick={exportToCSV} disabled={!results.length}>
+          Export CSV
         </Button>
       </Box>
 
       {loading && <Skeleton height={80} sx={{ mt: 3 }} />}
 
-      {/* ================= MOBILE BULK ACTION BAR ================= */}
-      {isMobile && selected.length > 0 && (
-        <Paper
-          elevation={3}
-          sx={{
-            position: "sticky",
-            top: 0,
-            zIndex: 10,
-            p: 1.5,
-            mb: 2,
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
-        >
-          <Typography fontWeight={600}>{selected.length} selected</Typography>
-
-          <Box display="flex" gap={1}>
-            <Button
-              size="small"
-              color="error"
-              variant="contained"
-              onClick={deleteSelected}
-            >
-              Delete
-            </Button>
-
-            <Button size="small" variant="outlined" onClick={clearSelection}>
-              Clear
-            </Button>
-          </Box>
-        </Paper>
-      )}
-
-      {/* ================= MOBILE VIEW ================= */}
-      {isMobile && results.length > 0 && (
-        <Box mt={3}>
-          {results.map((r) => (
-            <Card key={r.site} sx={{ mb: 2 }}>
-              <CardContent>
-                <Box display="flex" justifyContent="space-between">
-                  <Typography fontWeight={600}>{r.site}</Typography>
-                  <Checkbox
-                    checked={isSelected(r.site)}
-                    onChange={() => handleSelectOne(r.site)}
-                  />
-                </Box>
-
-                <Divider sx={{ my: 1 }} />
-
-                {Object.keys(columns).map(
-                  (k) =>
-                    columns[k] && (
-                      <Box
-                        key={k}
-                        sx={{
-                          mb: 0.5,
-                          display: "flex",
-                          gap: 1,
-                          flexWrap: "wrap",
-                          alignItems: "center",
-                        }}
-                      >
-                        <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                          {k}:
-                        </Typography>
-
-                        {k === "status" && (
-                          <StatusChip label={r.status} type="status" />
-                        )}
-                        {k === "risk" && (
-                          <StatusChip label={r.risk} type="risk" />
-                        )}
-                        {k === "trustLevel" && (
-                          <StatusChip label={r.trustLevel} type="trust" />
-                        )}
-
-                        {!["status", "risk", "trustLevel"].includes(k) && (
-                          <Typography variant="body2">{r[k]}</Typography>
-                        )}
-                      </Box>
-                    ),
-                )}
-              </CardContent>
-            </Card>
-          ))}
-        </Box>
-      )}
-
-      {/* ================= DESKTOP VIEW ================= */}
       {!isMobile && results.length > 0 && (
-        <Box mt={4}>
-          <Paper sx={{ p: 2 }}>
-            <TableContainer>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableCell padding="checkbox">
-                      <Box display="flex" alignItems="center">
-                        <Checkbox
-                          indeterminate={
-                            selected.length > 0 &&
-                            selected.length < results.length
-                          }
-                          checked={
-                            results.length > 0 &&
-                            selected.length === results.length
-                          }
-                          onChange={handleSelectAll}
-                        />
-                        <IconButton
-                          size="small"
-                          onClick={(e) => setMenuAnchor(e.currentTarget)}
-                        >
-                          <MoreVertIcon />
-                        </IconButton>
-                        <Menu
-                          anchorEl={menuAnchor}
-                          open={Boolean(menuAnchor)}
-                          onClose={() => setMenuAnchor(null)}
-                        >
-                          <MenuItem
-                            disabled={!selected.length}
-                            onClick={deleteSelected}
-                          >
-                            Delete Selected
-                          </MenuItem>
-                          <MenuItem
-                            disabled={!selected.length}
-                            onClick={clearSelection}
-                          >
-                            Clear Selection
-                          </MenuItem>
-                        </Menu>
-                      </Box>
-                    </TableCell>
-
-                    {Object.keys(columns).map(
-                      (k) => columns[k] && <TableCell key={k}>{k}</TableCell>,
-                    )}
+        <Paper sx={{ mt: 4, p: 2 }}>
+          <TableContainer>
+            <Table>
+              <TableHead>
+                <TableRow>
+                  {Object.keys(columns).map((k) => columns[k] && <TableCell key={k}>{k}</TableCell>)}
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {results.map((r) => (
+                  <TableRow key={r.site}>
+                    {columns.site && <TableCell>{r.site}</TableCell>}
+                    {columns.status && <TableCell><StatusChip label={r.status} type="status" /></TableCell>}
+                    {columns.risk && <TableCell><StatusChip label={r.risk} type="risk" /></TableCell>}
+                    {columns.trustLevel && <TableCell><StatusChip label={r.trustLevel} type="trust" /></TableCell>}
+                    {columns.securityLevel && <TableCell>{r.securityLevel}</TableCell>}
+                    {columns.credibilityMismatch && <TableCell>{r.credibilityMismatch}</TableCell>}
+                    {columns.publishedOn && <TableCell>{r.publishedOn}</TableCell>}
+                    {columns.explanation && <TableCell>{r.explanation}</TableCell>}
+                    {columns.browserNote && <TableCell>{r.browserNote}</TableCell>}
                   </TableRow>
-                </TableHead>
-
-                <TableBody>
-                  {results.map((r) => (
-                    <TableRow key={r.site} selected={isSelected(r.site)}>
-                      <TableCell padding="checkbox">
-                        <Checkbox
-                          checked={isSelected(r.site)}
-                          onChange={() => handleSelectOne(r.site)}
-                        />
-                      </TableCell>
-
-                      {columns.site && <TableCell>{r.site}</TableCell>}
-
-                      {columns.status && (
-                        <TableCell>
-                          <StatusChip label={r.status} type="status" />
-                        </TableCell>
-                      )}
-                      {columns.risk && (
-                        <TableCell>
-                          <StatusChip label={r.risk} type="risk" />
-                        </TableCell>
-                      )}
-                      {columns.trustLevel && (
-                        <TableCell>
-                          <StatusChip label={r.trustLevel} type="trust" />
-                        </TableCell>
-                      )}
-                      {columns.securityLevel && (
-                        <TableCell>{r.securityLevel}</TableCell>
-                      )}
-                      {columns.credibilityMismatch && (
-                        <TableCell>{r.credibilityMismatch}</TableCell>
-                      )}
-                      {columns.publishedOn && (
-                        <TableCell>{r.publishedOn}</TableCell>
-                      )}
-                      {columns.explanation && (
-                        <TableCell>{r.explanation}</TableCell>
-                      )}
-                      {columns.browserNote && (
-                        <TableCell>{r.browserNote}</TableCell>
-                      )}
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </Paper>
-        </Box>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Paper>
       )}
     </Container>
   );

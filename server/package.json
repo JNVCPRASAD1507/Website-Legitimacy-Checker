@@ -16,6 +16,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.2.1",
     "node-fetch": "^3.3.2",
+    "puppeteer": "^24.35.0",
     "whois-json": "^2.0.4"
   }
 }
